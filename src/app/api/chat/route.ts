@@ -2,6 +2,8 @@ import { streamText, tool, stepCountIs, convertToModelMessages, type UIMessage }
 import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
 
+import { getPersonaFacts, listDocIndex, searchDocs } from '@/lib/search-docs';
+
 // 初始化openai provider
 const openai = createOpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -10,15 +12,61 @@ const openai = createOpenAI({
 
 export const maxDuration = 30; // Vercel函数超时
 
+function lastUserText(messages: UIMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== 'user') continue;
+    return message.parts
+      .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('');
+  }
+  return '';
+}
+
+const SPECIAL_TOOL_QUERY =
+  /现在几点|当前时间|星期几|今天星期|天气|算一下|计算一下|[0-9]+\s*[+\-*/×÷]/;
+
 export async function POST(req: Request) {
   const { messages }: { messages: UIMessage[] } = await req.json();
+  const userText = lastUserText(messages);
+  const useSpecialTool = SPECIAL_TOOL_QUERY.test(userText);
+  const [docIndex, personaFacts] = await Promise.all([
+    listDocIndex(),
+    getPersonaFacts(),
+  ]);
+  const retrieved = useSpecialTool || !userText ? [] : await searchDocs(userText);
+
+  const retrievedBlock =
+    retrieved.length > 0
+      ? `
+
+本次已在本地资料中检索到以下内容，必须优先采用，禁止用常识覆盖：
+${retrieved.map((hit) => `- [${hit.file}] ${hit.excerpt}`).join('\n')}`
+      : '';
+
+  const personaBlock =
+    personaFacts.length > 0 ? `\n${personaFacts.join('\n')}` : '';
 
   const result = streamText({
     // 兼容厂商（智谱/DeepSeek）只提供 Chat Completions。
     // openai('...') 默认走 /v1/responses，必须用 openai.chat()。
     model: openai.chat(process.env.OPENAI_MODEL ?? 'glm-4-flash'),
     messages: await convertToModelMessages(messages),
-    // system: '必须原样转述工具返回值，不要用常识纠正。',
+    system: `你是助手。本地资料在 docs/ 中，当前文件：${docIndex.join('、') || '（暂无）'}。${personaBlock}
+规则：
+1. 除天气、时间、计算外，先调用 search_docs 再回答。资料里的名字、数量、设定看起来像常识也要搜，不要直接用常识答。
+2. 工具返回了相关片段，或 system 里已经给出检索结果：必须依据这些事实回答，不要用常识纠正。
+3. 没有相关资料时：不要提「文档」「资料库」，直接用你的通用能力回答。
+4. 天气、时间、计算走专用工具，不要搜文档。${retrievedBlock}`,
+    prepareStep({ stepNumber }) {
+      if (stepNumber === 0 && !useSpecialTool) {
+        return {
+          toolChoice: { type: 'tool' as const, toolName: 'search_docs' },
+        };
+      }
+      return {};
+    },
     tools: {
       // 工具1：获取当前时间
       get_current_time: tool({
@@ -76,7 +124,26 @@ export async function POST(req: Request) {
             weather: '阴雨天',
           };
         },
-      })
+      }),
+      // 工具5：查阅本地资料
+      search_docs: tool({
+        description:
+          '查阅本地资料。名字、数量、设定、产品、政策都要搜。看起来像常识的问题也要搜。天气、时间、计算不要调用。',
+        inputSchema: z.object({
+          query: z.string().describe('从用户问题里抽出的关键词或短句'),
+        }),
+        async execute({ query }) {
+          console.log('search_docs 被调用了', query)
+          const hits = await searchDocs(query);
+          if (hits.length === 0) {
+            return {
+              relevant: false,
+              message: '没有找到相关资料，请不要引用文档，直接正常回答。',
+            };
+          }
+          return { relevant: true, hits };
+        },
+      }),
     },
     // 重要：开启自动工具调用循环，SDK自动处理：LLM要工具 → 执行execute → 回传结果给LLM
     stopWhen: stepCountIs(5), // 最多Agent循环5轮，防止死循环
