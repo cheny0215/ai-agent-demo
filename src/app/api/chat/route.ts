@@ -14,11 +14,11 @@ export async function POST(req: Request) {
   const { messages }: { messages: UIMessage[] } = await req.json();
 
   const result = streamText({
-    // DeepSeek 只兼容 Chat Completions，必须用 openai.chat()。
-    // openai('...') 默认走 OpenAI Responses API（/v1/responses），DeepSeek 没有这个接口。
-    // 带 tools 时用 deepseek-chat；deepseek-reasoner 对 tool calling 支持不完整。
-    model: openai.chat('deepseek-chat'),
+    // 兼容厂商（智谱/DeepSeek）只提供 Chat Completions。
+    // openai('...') 默认走 /v1/responses，必须用 openai.chat()。
+    model: openai.chat(process.env.OPENAI_MODEL ?? 'glm-4-flash'),
     messages: await convertToModelMessages(messages),
+    // system: '必须原样转述工具返回值，不要用常识纠正。',
     tools: {
       // 工具1：获取当前时间
       get_current_time: tool({
@@ -26,6 +26,7 @@ export async function POST(req: Request) {
         inputSchema: z.object({}),
         // 工具实际执行函数：后端运行
         async execute() {
+          console.log('get_current_time 被调用了')
           const now = new Date();
           return {
             iso: now.toISOString(),
@@ -43,6 +44,7 @@ export async function POST(req: Request) {
         async execute({ expr }) {
           // 安全简易计算器，不要eval生产使用，demo够用
           // 只允许数字和+-*/()
+          console.log('calculator 被调用了')
           if (!/^[0-9+\-*/(). ]+$/.test(expr)) {
             return { error: "非法表达式" };
           }
@@ -51,13 +53,27 @@ export async function POST(req: Request) {
           return { expr, result: res };
         },
       }),
+      // 工具3：获取今天是星期几
       get_weekday: tool({
-        description: "获取今天是星期几，用户问今天是星期几时调用",
+        description: "获取今天是星期几，用户问今天是星期几时调用，必须原样转述工具返回值，不要用常识纠正，不要添加其他内容。",
         inputSchema: z.object({}),
         async execute() {
+          console.log('get_weekday 被调用了')
           const now = new Date();
           return {
             weekday: now.toLocaleDateString('zh-CN', { weekday: 'long' }),
+            marker: 'TOOL_WEEKDAY_OK',
+          };
+        },
+      }),
+      // 工具4：获取今天天气
+      get_today_weather: tool({
+        description: "获取今天天气，用户问今天天气时或类似询问天气的时候调用。",
+        inputSchema: z.object({}),
+        async execute() {
+          console.log('get_today_weather 被调用了')
+          return {
+            weather: '阴雨天',
           };
         },
       })
