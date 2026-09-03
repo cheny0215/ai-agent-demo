@@ -114,17 +114,67 @@ ${retrieved.map((hit) => `- [${hit.file}] ${hit.excerpt}`).join('\n')}`
           };
         },
       }),
-      // 工具4：获取今天天气
-      get_today_weather: tool({
-        description: "获取今天天气，用户问今天天气时或类似询问天气的时候调用。",
-        inputSchema: z.object({}),
-        async execute() {
-          console.log('get_today_weather 被调用了')
+      // 工具4：获取天气
+      get_weather: tool({
+        description: "获取昨天、今天和未来6天的天气，用户提到天气时直接调用。用户没说具体哪天时，默认是今天。用户只说省份、没说具体城市时，不要调用 get_weather，先问用户是哪座城市。根据工具返回的昼夜天气、温度、风力、空气质量一并说明。",
+        inputSchema: z.object({
+          cityName: z.string().describe("用户提到的中国城市名。例如：上海、齐齐哈尔、石家庄。"),
+          provinceName: z.string().describe("用户提到的中国省份名，例如：上海、黑龙江、河北。"),
+          day: z.string().describe('用户问的哪一天。没说日期就用「今天」。问这几天/一周/预报用「未来」。具体日子用 YYYY-MM-DD，例如 2026-09-12。'),
+        }),
+        async execute({ cityName, provinceName, day }) {
+          const dayKey = (day ?? '今天').trim() || '今天';
+          const dayIndexMap = new Map<string, number | number[]>([
+            ['昨天', 0],
+            ['今天', 1],
+            ['明天', 2],
+            ['后天', 3],
+            ['未来', [2, 3, 4, 5, 6, 7]],
+          ]);
+
+          let dayIndexes: number[];
+          const mapped = dayIndexMap.get(dayKey);
+          if (mapped !== undefined) {
+            dayIndexes = Array.isArray(mapped) ? mapped : [mapped];
+          } else if (/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const [year, month, date] = dayKey.split('-').map(Number);
+            const target = new Date(year, month - 1, date);
+            const diffDays = Math.round(
+              (target.getTime() - today.getTime()) / (24 * 60 * 60 * 1000),
+            );
+            const dayIndex = diffDays + 1;
+            if (dayIndex < 0 || dayIndex > 7) {
+              return { error: `只能查询昨天到未来6天，${dayKey} 不在范围内` };
+            }
+            dayIndexes = [dayIndex];
+          } else {
+            return {
+              error: '请输入昨天、今天、明天、后天、未来，或 YYYY-MM-DD',
+            };
+          }
+
+          if (!provinceName || !cityName) {
+            return { error: `请输入省份和城市` };
+          }
+          const res = await fetch(`https://cn.apihz.cn/api/tianqi/tengxun.php?id=10004465&key=0e8b0763210c6f7f19b175a6c177ca4f&province=${provinceName}&city=${cityName}`)
+          console.log(res)
+          if (!res.ok) {
+            return { error: "获取天气失败" };
+          }
+          const {data} = await res.json();
+          console.log(data)
+          const weather = dayIndexes.map((i) => data[i]).filter(Boolean);
+          if (weather.length === 0) {
+            return { error: '没有这一天的天气数据' };
+          }
           return {
-            weather: '阴雨天',
+            weather: weather.length === 1 ? weather[0] : weather,
           };
+        }
         },
-      }),
+      ),
       // 工具5：查阅本地资料
       search_docs: tool({
         description:

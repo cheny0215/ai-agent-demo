@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback ,AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -63,6 +63,7 @@ function SidebarNav({
     return (
       <>
         <Avatar className="size-8 rounded-lg">
+        <AvatarImage src={"/bot-avatar.png"} alt="助手头像" />
           <AvatarFallback className="rounded-lg bg-blue-500 text-xs font-bold text-white">
             AI
           </AvatarFallback>
@@ -181,6 +182,7 @@ function MessageRow({ message }: { message: UIMessage }) {
     >
       {!isUser && (
         <Avatar className="hidden md:flex">
+          <AvatarImage src={"/bot-avatar.png"} alt="助手头像" />
           <AvatarFallback className="bg-neutral-800 text-white">
             <Bot className="size-4" />
           </AvatarFallback>
@@ -226,6 +228,7 @@ function MessageRow({ message }: { message: UIMessage }) {
       </div>
       {isUser && (
         <Avatar className="hidden md:flex">
+          <AvatarImage src={"/user-avatar.png"} alt="用户头像" />
           <AvatarFallback className="bg-blue-100 text-blue-700">
             <User className="size-4" />
           </AvatarFallback>
@@ -254,6 +257,7 @@ export default function Home() {
   const lastMessageFingerprint = messages.at(-1)
     ? JSON.stringify(messages.at(-1)?.parts)
     : '';
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
@@ -332,6 +336,7 @@ export default function Home() {
             {busy && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Avatar className="hidden md:flex">
+                <AvatarImage src={"/bot-avatar.png"} alt="助手头像" />
                   <AvatarFallback className="bg-neutral-800 text-white">
                     <Bot className="size-4" />
                   </AvatarFallback>
@@ -353,16 +358,18 @@ export default function Home() {
             stickToBottom.current = true;
             sendMessage({ text: input });
             setInput('');
+            inputRef.current?.focus();
           }}
         >
-          <div className="flex items-center gap-2 rounded-xl border bg-background px-2 py-1.5 shadow-sm">
+          <div className={cn("flex items-center gap-2 rounded-xl border bg-background px-2 py-1.5 shadow-sm", busy && "bg-muted")}>
             <Input
               className="border-0 shadow-none focus-visible:ring-0"
               type="text"
               value={input}
-              placeholder="输入你的问题..."
+              placeholder={busy ? "正在回复..." : "输入你的问题..."}
               onChange={(e) => setInput(e.target.value)}
-              disabled={busy}
+              readOnly={busy}
+              ref={inputRef}
             />
             <Button
               type="submit"
